@@ -150,10 +150,10 @@ func createHandler(clientset *kubernetes.Clientset) http.Handler {
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		hostname := extractHostnameFromRequest(r)
 		ipAddress := parseIPAddressFromHostname(hostname)
-		svcFriendlyHostname := strings.ReplaceAll(hostname, "_", "-")
+		ingFriendlyHostname := strings.ReplaceAll(hostname, "_", "-")
 		svcFriendlyIp := strings.ReplaceAll(ipAddress, ".", "-")
 
-		err := createCRDInKubernetes(clientset, ipAddress, svcFriendlyHostname, svcFriendlyIp)
+		err := createCRDInKubernetes(clientset, ipAddress, ingFriendlyHostname, svcFriendlyIp)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("Failed to create CRD: %v", err), http.StatusInternalServerError)
 			return
@@ -161,7 +161,7 @@ func createHandler(clientset *kubernetes.Clientset) http.Handler {
 
 		response := map[string]string{
 			"ipAddress": ipAddress,
-			"hostname":  hostname,
+			"hostname":  ingFriendlyHostname,
 		}
 
 		w.Header().Set("Content-Type", "application/json")
