@@ -100,22 +100,28 @@ type IcanhazlbBackendPort struct {
 }
 
 func main() {
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		hostname := r.Host
-		ipAddress := parseIPAddressFromHostname(hostname)
-
-		createCRDInKubernetes(ipAddress, hostname)
-
-		response := map[string]string{
-			"ipAddress": ipAddress,
-			"hostname":  hostname,
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(response)
-	})
-
+	http.HandleFunc("/", handler)
 	log.Fatal(http.ListenAndServe(":8080", nil))
+}
+
+func handler(w http.ResponseWriter, r *http.Request) {
+	hostname := extractHostnameFromRequest(r)
+	ipAddress := parseIPAddressFromHostname(hostname)
+
+	createCRDInKubernetes(ipAddress, hostname)
+
+	response := map[string]string{
+		"ipAddress": ipAddress,
+		"hostname":  hostname,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+func extractHostnameFromRequest(r *http.Request) string {
+	host := strings.SplitN(r.Host, ":", 2)[0]
+	return host
 }
 
 func parseIPAddressFromHostname(hostname string) string {
