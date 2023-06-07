@@ -177,14 +177,8 @@ func extractHostnameFromRequest(r *http.Request) string {
 }
 
 func parseIPAddressFromHostname(hostname string) string {
-	// Regular expression patterns for matching different IP address formats
-	ipv4REDots := `(\d{1,3}\.){3}\d{1,3}`
-	ipv4REDashes := `(\d{1,3}-){3}\d{1,3}`
-	ipv4REUnderscores := `(\d{1,3}_){3}\d{1,3}`
-	ipv4REMixed := `(\d{1,3}[_-]){3}\d{1,3}`
-
-	// Combine the regular expression patterns
-	ipv4RE := fmt.Sprintf(`(%s|%s|%s|%s)`, ipv4REDots, ipv4REDashes, ipv4REUnderscores, ipv4REMixed)
+	// Regular expression pattern for matching IP address formats
+	ipv4RE := `((\d{1,3}\.){3}\d{1,3}|(\d{1,3}-){3}\d{1,3}|(\d{1,3}_){3}\d{1,3}|(\d{1,3}[-_.]){3}\d{1,3})`
 
 	// Match the IP address using the regular expression
 	re := regexp.MustCompile(ipv4RE)
@@ -192,10 +186,14 @@ func parseIPAddressFromHostname(hostname string) string {
 
 	if match != "" {
 		// Remove any non-numeric characters from the matched IP address
-		ip := strings.ReplaceAll(match, "-", ".")
-		ip = strings.ReplaceAll(ip, "_", ".")
+		ip := strings.Map(func(r rune) rune {
+			if r == '-' || r == '_' || r == '.' {
+				return '.'
+			}
+			return r
+		}, match)
 
-		// Validate and return the parsed IP address
+		// Validate and return the parsed IPv4 address
 		parsedIP := net.ParseIP(ip)
 		if parsedIP == nil || !parsedIP.To4().Equal(parsedIP) {
 			fmt.Printf("Failed to parse IPv4 address from hostname: %s\n", hostname)

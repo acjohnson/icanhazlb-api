@@ -1,0 +1,102 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: icanhazlb
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: icanhazlb-api
+  namespace: icanhazlb
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: crd-creator
+  namespace: default
+rules:
+  - apiGroups: ["service.icanhazlb.com"]
+    resources: ["icanhazlbservices"]
+    verbs: ["create", "get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: crd-creator-binding
+  namespace: default
+subjects:
+  - kind: ServiceAccount
+    name: icanhazlb-api
+    namespace: icanhazlb
+roleRef:
+  kind: Role
+  name: crd-creator
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: icanhazlb-api
+  namespace: icanhazlb
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: icanhazlb-api
+  template:
+    metadata:
+      labels:
+        app: icanhazlb-api
+    spec:
+      serviceAccountName: icanhazlb-api
+      containers:
+      - command:
+        image: icanhazlb-api:latest
+        imagePullPolicy: Always
+        #livenessProbe:
+        #  httpGet:
+        #    path: /
+        #    port: 8080
+        #  initialDelaySeconds: 20
+        #  timeoutSeconds: 10
+        #  periodSeconds: 60
+        name: icanhazlb-api
+        ports:
+        - containerPort: 8080
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: icanhazlb-api
+  namespace: icanhazlb
+spec:
+  selector:
+    app: icanhazlb-api
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: icanhazlb-api
+  namespace: icanhazlb
+  annotations:
+    #cert-manager.io/cluster-issuer: letsencrypt-production
+    #kubernetes.io/tls-acme: "true"
+    #nginx.ingress.kubernetes.io/rewrite-target: /
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: "*.example.domain.com"
+    http:
+      paths:
+      - backend:
+          service:
+            name: icanhazlb-api
+            port:
+              number: 80
+        path: /
+        pathType: ImplementationSpecific
