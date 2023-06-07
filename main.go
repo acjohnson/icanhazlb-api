@@ -150,8 +150,10 @@ func createHandler(clientset *kubernetes.Clientset) http.Handler {
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		hostname := extractHostnameFromRequest(r)
 		ipAddress := parseIPAddressFromHostname(hostname)
+		svcFriendlyHostname := strings.ReplaceAll(hostname, "_", "-")
+		svcFriendlyIp := strings.ReplaceAll(ipAddress, ".", "-")
 
-		err := createCRDInKubernetes(clientset, ipAddress, hostname)
+		err := createCRDInKubernetes(clientset, ipAddress, svcFriendlyHostname, svcFriendlyIp)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("Failed to create CRD: %v", err), http.StatusInternalServerError)
 			return
@@ -206,19 +208,19 @@ func parseIPAddressFromHostname(hostname string) string {
 	return ""
 }
 
-func createCRDInKubernetes(clientset *kubernetes.Clientset, ipAddress, hostname string) error {
+func createCRDInKubernetes(clientset *kubernetes.Clientset, ipAddress, hostname string, svcFriendlyIp string) error {
 	icanhazlbService := &IcanhazlbService{
 		TypeMeta: v1.TypeMeta{
 			APIVersion: fmt.Sprintf("%s/%s", icanhazlbAPIGroup, icanhazlbAPIVersion),
 			Kind:       "IcanhazlbService",
 		},
 		ObjectMeta: v1.ObjectMeta{
-			Name:      fmt.Sprintf("icanhazlb-%s", ipAddress),
+			Name:      fmt.Sprintf("icanhazlb-%s", svcFriendlyIp),
 			Namespace: "default",
 		},
 		Spec: IcanhazlbServiceSpec{
 			EndpointSlices: IcanhazlbEndpointSlices{
-				Name:        fmt.Sprintf("icanhazlb-%s-svc", ipAddress),
+				Name:        fmt.Sprintf("icanhazlb-%s-svc", svcFriendlyIp),
 				AddressType: "IPv4",
 				Ports: []IcanhazlbPort{
 					{
@@ -235,11 +237,11 @@ func createCRDInKubernetes(clientset *kubernetes.Clientset, ipAddress, hostname 
 					},
 				},
 				Labels: map[string]string{
-					"kubernetes.io/service-name": fmt.Sprintf("icanhazlb-%s-svc", ipAddress),
+					"kubernetes.io/service-name": fmt.Sprintf("icanhazlb-%s-svc", svcFriendlyIp),
 				},
 			},
 			Services: IcanhazlbServices{
-				Name:       fmt.Sprintf("icanhazlb-%s-svc", ipAddress),
+				Name:       fmt.Sprintf("icanhazlb-%s-svc", svcFriendlyIp),
 				Type:       "ClusterIP",
 				IPFamilies: []string{"IPv4"},
 				Ports: []IcanhazlbPort{
@@ -250,11 +252,11 @@ func createCRDInKubernetes(clientset *kubernetes.Clientset, ipAddress, hostname 
 					// Add more ports if needed
 				},
 				Labels: map[string]string{
-					"kubernetes.io/service-name": fmt.Sprintf("icanhazlb-%s-svc", ipAddress),
+					"kubernetes.io/service-name": fmt.Sprintf("icanhazlb-%s-svc", svcFriendlyIp),
 				},
 			},
 			Ingresses: IcanhazlbIngresses{
-				Name: fmt.Sprintf("icanhazlb-%s-ing", ipAddress),
+				Name: fmt.Sprintf("icanhazlb-%s-ing", svcFriendlyIp),
 				Annotations: map[string]string{
 					"nginx.ingress.kubernetes.io/upstream-vhost": "retro.adrenlinerush.net",
 				},
@@ -269,7 +271,7 @@ func createCRDInKubernetes(clientset *kubernetes.Clientset, ipAddress, hostname 
 									PathType: "ImplementationSpecific",
 									Backend: IcanhazlbHTTPBackend{
 										Service: IcanhazlbHTTPServiceBackend{
-											Name: fmt.Sprintf("icanhazlb-%s-svc", ipAddress),
+											Name: fmt.Sprintf("icanhazlb-%s-svc", svcFriendlyIp),
 											Port: IcanhazlbBackendPort{
 												Number: intstr.FromInt(80),
 											},
