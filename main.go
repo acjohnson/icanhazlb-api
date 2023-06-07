@@ -3,172 +3,212 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"flag"
+	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
-	"regexp"
+	"os/signal"
 	"strings"
+	"syscall"
 
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
 )
 
-// IcanhazlbService represents the CRD object structure
+const (
+	icanhazlbAPIGroup      = "service.icanhazlb.com"
+	icanhazlbAPIVersion    = "v1alpha1"
+	icanhazlbServicePlural = "icanhazlbservices"
+)
+
 type IcanhazlbService struct {
-	metav1.TypeMeta   `json:",inline"`
-	metav1.ObjectMeta `json:"metadata"`
-	Spec              IcanhazlbServiceSpec `json:"spec"`
+	v1.TypeMeta   `json:",inline"`
+	v1.ObjectMeta `json:"metadata,omitempty"`
+	Spec          IcanhazlbServiceSpec `json:"spec"`
 }
 
-// IcanhazlbServiceSpec represents the spec structure within the CRD
 type IcanhazlbServiceSpec struct {
-	EndpointSlices IcanhazlbEndpointSlice `json:"endpointSlices"`
-	Services       IcanhazlbServiceData   `json:"services"`
-	Ingresses      IcanhazlbIngressData   `json:"ingresses"`
+	EndpointSlices IcanhazlbEndpointSlices `json:"endpointSlices"`
+	Services       IcanhazlbServices       `json:"services"`
+	Ingresses      IcanhazlbIngresses      `json:"ingresses"`
 }
 
-// IcanhazlbEndpointSlice represents the endpointSlices structure within the CRD
-type IcanhazlbEndpointSlice struct {
-	Name        string                 `json:"name"`
-	AddressType string                 `json:"addressType"`
-	Ports       []IcanhazlbServicePort `json:"ports"`
-	Endpoints   []IcanhazlbEndpoint    `json:"endpoints"`
-	Labels      map[string]string      `json:"labels"`
+type IcanhazlbEndpointSlices struct {
+	Name        string              `json:"name"`
+	AddressType string              `json:"addressType"`
+	Ports       []IcanhazlbPort     `json:"ports"`
+	Endpoints   []IcanhazlbEndpoint `json:"endpoints"`
+	Labels      map[string]string   `json:"labels"`
 }
 
-// IcanhazlbServicePort represents the port structure within endpointSlices
-type IcanhazlbServicePort struct {
+type IcanhazlbPort struct {
 	Name string `json:"name"`
-	Port int32  `json:"port"`
+	Port int    `json:"port"`
 }
 
-// IcanhazlbEndpoint represents the endpoint structure within endpointSlices
 type IcanhazlbEndpoint struct {
 	Addresses []string `json:"addresses"`
 }
 
-// IcanhazlbServiceData represents the services structure within the CRD
-type IcanhazlbServiceData struct {
-	Name       string                 `json:"name"`
-	Type       string                 `json:"type"`
-	IPFamilies []string               `json:"ipFamilies"`
-	Ports      []IcanhazlbServicePort `json:"ports"`
-	Labels     map[string]string      `json:"labels"`
+type IcanhazlbServices struct {
+	Name       string            `json:"name"`
+	Type       string            `json:"type"`
+	IPFamilies []string          `json:"ipFamilies"`
+	Ports      []IcanhazlbPort   `json:"ports"`
+	Labels     map[string]string `json:"labels"`
 }
 
-// IcanhazlbIngressData represents the ingresses structure within the CRD
-type IcanhazlbIngressData struct {
-	Name             string            `json:"name"`
-	Annotations      map[string]string `json:"annotations"`
-	IngressClassName string            `json:"ingressClassName"`
-	Rules            []IcanhazlbRule   `json:"rules"`
+type IcanhazlbIngresses struct {
+	Name             string                 `json:"name"`
+	Annotations      map[string]string      `json:"annotations"`
+	IngressClassName string                 `json:"ingressClassName"`
+	Rules            []IcanhazlbIngressRule `json:"rules"`
 }
 
-// IcanhazlbRule represents the rule structure within ingresses
-type IcanhazlbRule struct {
+type IcanhazlbIngressRule struct {
 	Host string        `json:"host"`
 	HTTP IcanhazlbHTTP `json:"http"`
 }
 
-// IcanhazlbHTTP represents the HTTP structure within ingresses
 type IcanhazlbHTTP struct {
-	Paths []IcanhazlbPath `json:"paths"`
+	Paths []IcanhazlbHTTPPath `json:"paths"`
 }
 
-// IcanhazlbPath represents the path structure within HTTP
-type IcanhazlbPath struct {
-	Path     string           `json:"path"`
-	PathType string           `json:"pathType"`
-	Backend  IcanhazlbBackend `json:"backend"`
+type IcanhazlbHTTPPath struct {
+	Path     string               `json:"path"`
+	PathType string               `json:"pathType"`
+	Backend  IcanhazlbHTTPBackend `json:"backend"`
 }
 
-// IcanhazlbBackend represents the backend structure within path
-type IcanhazlbBackend struct {
-	Service IcanhazlbServiceBackend `json:"service"`
+type IcanhazlbHTTPBackend struct {
+	Service IcanhazlbHTTPServiceBackend `json:"service"`
 }
 
-// IcanhazlbServiceBackend represents the service structure within backend
-type IcanhazlbServiceBackend struct {
+type IcanhazlbHTTPServiceBackend struct {
 	Name string               `json:"name"`
 	Port IcanhazlbBackendPort `json:"port"`
 }
 
-// IcanhazlbBackendPort represents the port structure within service
 type IcanhazlbBackendPort struct {
-	Number int32 `json:"number"`
+	Number intstr.IntOrString `json:"number"`
 }
+
+var kubeconfig string
 
 func main() {
-	http.HandleFunc("/", handler)
-	log.Fatal(http.ListenAndServe(":8080", nil))
-}
+	flag.StringVar(&kubeconfig, "kubeconfig", "", "Path to the kubeconfig file")
+	flag.Parse()
 
-func handler(w http.ResponseWriter, r *http.Request) {
-	hostname := extractHostnameFromRequest(r)
-	ipAddress := parseIPAddressFromHostname(hostname)
-
-	createCRDInKubernetes(ipAddress, hostname)
-
-	response := map[string]string{
-		"ipAddress": ipAddress,
-		"hostname":  hostname,
+	// Build the Kubernetes configuration
+	config, err := clientcmd.BuildConfigFromFlags("", kubeconfig)
+	if err != nil {
+		log.Fatalf("Failed to build Kubernetes configuration: %v", err)
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
+	// Create the Kubernetes clientset
+	clientset, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		log.Fatalf("Failed to create Kubernetes clientset: %v", err)
+	}
+
+	// Start the HTTP server
+	server := &http.Server{
+		Addr:    ":8080",
+		Handler: createHandler(clientset),
+	}
+
+	go func() {
+		log.Println("Starting server on port 8080")
+		if err := server.ListenAndServe(); err != nil {
+			log.Fatalf("Failed to start server: %v", err)
+		}
+	}()
+
+	// Wait for termination signal
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
+	<-stop
+
+	log.Println("Shutting down server...")
+
+	// Gracefully shut down the server
+	err = server.Shutdown(context.Background())
+	if err != nil {
+		log.Printf("Error shutting down server: %v", err)
+	}
+
+	log.Println("Server stopped.")
+}
+
+func createHandler(clientset *kubernetes.Clientset) http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		hostname := extractHostnameFromRequest(r)
+		ipAddress := parseIPAddressFromHostname(hostname)
+
+		err := createCRDInKubernetes(clientset, ipAddress, hostname)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("Failed to create CRD: %v", err), http.StatusInternalServerError)
+			return
+		}
+
+		response := map[string]string{
+			"ipAddress": ipAddress,
+			"hostname":  hostname,
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(response)
+	})
+
+	return mux
 }
 
 func extractHostnameFromRequest(r *http.Request) string {
-	host := strings.SplitN(r.Host, ":", 2)[0]
-	return host
+	hostname := strings.SplitN(r.Host, ":", 2)[0]
+	return hostname
 }
 
 func parseIPAddressFromHostname(hostname string) string {
-	// Regular expression to match IPv4 address in various forms
-	regex := regexp.MustCompile(`(\d{1,3}[-._]){3}\d{1,3}`)
-
-	match := regex.FindString(hostname)
-	matchFrDash := strings.ReplaceAll(match, "-", ".")
-	matchFrUnderscore := strings.ReplaceAll(matchFrDash, "_", ".")
-
-	return matchFrUnderscore
+	// Extract the IP address from the hostname using a regular expression or other parsing method
+	// Here's an example using the net package's ParseIP function to extract the first IPv4 address
+	ip := net.ParseIP(hostname)
+	if ip == nil {
+		log.Printf("Failed to parse IP address from hostname: %s", hostname)
+		return ""
+	}
+	ip = ip.To4()
+	if ip == nil {
+		log.Printf("Failed to parse IPv4 address from hostname: %s", hostname)
+		return ""
+	}
+	return ip.String()
 }
 
-func createCRDInKubernetes(ipAddress, hostname string) {
-	config, err := clientcmd.BuildConfigFromFlags("", os.Getenv("KUBECONFIG"))
-	if err != nil {
-		log.Fatalf("Failed to build Kubernetes config: %v", err)
-	}
-
-	clientset, err := kubernetes.NewForConfig(config)
-	if err != nil {
-		log.Fatalf("Failed to create Kubernetes client: %v", err)
-	}
-
-	crdName := "icanhazlb-" + ipAddress
-	endpointSlicesName := "icanhazlb-" + ipAddress + "-svc"
-	servicesName := "icanhazlb-" + ipAddress + "-svc"
-	ingressesName := "icanhazlb-" + ipAddress + "-ing"
-
+func createCRDInKubernetes(clientset *kubernetes.Clientset, ipAddress, hostname string) error {
 	icanhazlbService := &IcanhazlbService{
-		TypeMeta: metav1.TypeMeta{
-			APIVersion: "service.icanhazlb.com/v1alpha1",
+		TypeMeta: v1.TypeMeta{
+			APIVersion: fmt.Sprintf("%s/%s", icanhazlbAPIGroup, icanhazlbAPIVersion),
 			Kind:       "IcanhazlbService",
 		},
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      crdName,
+		ObjectMeta: v1.ObjectMeta{
+			Name:      fmt.Sprintf("icanhazlb-%s", ipAddress),
 			Namespace: "default",
 		},
 		Spec: IcanhazlbServiceSpec{
-			EndpointSlices: IcanhazlbEndpointSlice{
-				Name:        endpointSlicesName,
+			EndpointSlices: IcanhazlbEndpointSlices{
+				Name:        fmt.Sprintf("icanhazlb-%s-svc", ipAddress),
 				AddressType: "IPv4",
-				Ports: []IcanhazlbServicePort{
+				Ports: []IcanhazlbPort{
 					{
 						Name: "http",
 						Port: 80,
 					},
+					// Add more ports if needed
 				},
 				Endpoints: []IcanhazlbEndpoint{
 					{
@@ -178,42 +218,43 @@ func createCRDInKubernetes(ipAddress, hostname string) {
 					},
 				},
 				Labels: map[string]string{
-					"kubernetes.io/service-name": "icanhazlb-" + ipAddress + "-svc",
+					"kubernetes.io/service-name": fmt.Sprintf("icanhazlb-%s-svc", ipAddress),
 				},
 			},
-			Services: IcanhazlbServiceData{
-				Name:       servicesName,
+			Services: IcanhazlbServices{
+				Name:       fmt.Sprintf("icanhazlb-%s-svc", ipAddress),
 				Type:       "ClusterIP",
 				IPFamilies: []string{"IPv4"},
-				Ports: []IcanhazlbServicePort{
+				Ports: []IcanhazlbPort{
 					{
 						Name: "http",
 						Port: 80,
 					},
+					// Add more ports if needed
 				},
 				Labels: map[string]string{
-					"kubernetes.io/service-name": "icanhazlb-" + ipAddress + "-svc",
+					"kubernetes.io/service-name": fmt.Sprintf("icanhazlb-%s-svc", ipAddress),
 				},
 			},
-			Ingresses: IcanhazlbIngressData{
-				Name: ingressesName,
+			Ingresses: IcanhazlbIngresses{
+				Name: fmt.Sprintf("icanhazlb-%s-ing", ipAddress),
 				Annotations: map[string]string{
 					"nginx.ingress.kubernetes.io/upstream-vhost": "retro.adrenlinerush.net",
 				},
 				IngressClassName: "nginx",
-				Rules: []IcanhazlbRule{
+				Rules: []IcanhazlbIngressRule{
 					{
 						Host: hostname,
 						HTTP: IcanhazlbHTTP{
-							Paths: []IcanhazlbPath{
+							Paths: []IcanhazlbHTTPPath{
 								{
 									Path:     "/",
 									PathType: "ImplementationSpecific",
-									Backend: IcanhazlbBackend{
-										Service: IcanhazlbServiceBackend{
-											Name: servicesName,
+									Backend: IcanhazlbHTTPBackend{
+										Service: IcanhazlbHTTPServiceBackend{
+											Name: fmt.Sprintf("icanhazlb-%s-svc", ipAddress),
 											Port: IcanhazlbBackendPort{
-												Number: 80,
+												Number: intstr.FromInt(80),
 											},
 										},
 									},
@@ -226,16 +267,18 @@ func createCRDInKubernetes(ipAddress, hostname string) {
 		},
 	}
 
-	_, err = clientset.
-		CoreV1().
-		RESTClient().
-		Post().
-		AbsPath("/apis/service.icanhazlb.com/v1alpha1/namespaces/default/icanhazlbservices").
-		Body(icanhazlbService).
-		DoRaw(context.TODO()) // Pass the context.TODO() as the argument
+	raw, err := json.Marshal(icanhazlbService)
 	if err != nil {
-		log.Fatalf("Failed to create CRD: %v", err)
+		return fmt.Errorf("failed to marshal CRD: %v", err)
 	}
 
-	log.Printf("Created CRD for IP address %s and hostname %s", ipAddress, hostname)
+	_, err = clientset.CoreV1().RESTClient().Post().
+		AbsPath(fmt.Sprintf("/apis/%s/%s/namespaces/default/%s", icanhazlbAPIGroup, icanhazlbAPIVersion, icanhazlbServicePlural)).
+		Body(raw).
+		Do(context.TODO())
+	if err != nil {
+		return fmt.Errorf("failed to create CRD: %v", err)
+	}
+
+	return nil
 }
