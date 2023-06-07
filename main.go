@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"regexp"
 	"strings"
 	"syscall"
 
@@ -174,19 +175,35 @@ func extractHostnameFromRequest(r *http.Request) string {
 }
 
 func parseIPAddressFromHostname(hostname string) string {
-	// Extract the IP address from the hostname using a regular expression or other parsing method
-	// Here's an example using the net package's ParseIP function to extract the first IPv4 address
-	ip := net.ParseIP(hostname)
-	if ip == nil {
-		log.Printf("Failed to parse IP address from hostname: %s", hostname)
-		return ""
+	// Regular expression patterns for matching different IP address formats
+	ipv4REDots := `(\d{1,3}\.){3}\d{1,3}`
+	ipv4REDashes := `(\d{1,3}-){3}\d{1,3}`
+	ipv4REUnderscores := `(\d{1,3}_){3}\d{1,3}`
+	ipv4REMixed := `(\d{1,3}[_-]){3}\d{1,3}`
+
+	// Combine the regular expression patterns
+	ipv4RE := fmt.Sprintf(`(%s|%s|%s|%s)`, ipv4REDots, ipv4REDashes, ipv4REUnderscores, ipv4REMixed)
+
+	// Match the IP address using the regular expression
+	re := regexp.MustCompile(ipv4RE)
+	match := re.FindString(hostname)
+
+	if match != "" {
+		// Remove any non-numeric characters from the matched IP address
+		ip := strings.ReplaceAll(match, "-", ".")
+		ip = strings.ReplaceAll(ip, "_", ".")
+
+		// Validate and return the parsed IP address
+		parsedIP := net.ParseIP(ip)
+		if parsedIP == nil || !parsedIP.To4().Equal(parsedIP) {
+			fmt.Printf("Failed to parse IPv4 address from hostname: %s\n", hostname)
+			return ""
+		}
+		return parsedIP.String()
 	}
-	ip = ip.To4()
-	if ip == nil {
-		log.Printf("Failed to parse IPv4 address from hostname: %s", hostname)
-		return ""
-	}
-	return ip.String()
+
+	fmt.Printf("Failed to parse IP address from hostname: %s\n", hostname)
+	return ""
 }
 
 func createCRDInKubernetes(clientset *kubernetes.Clientset, ipAddress, hostname string) error {
@@ -272,12 +289,38 @@ func createCRDInKubernetes(clientset *kubernetes.Clientset, ipAddress, hostname 
 		return fmt.Errorf("failed to marshal CRD: %v", err)
 	}
 
-	_, err = clientset.CoreV1().RESTClient().Post().
+	request := clientset.CoreV1().RESTClient().Post().
 		AbsPath(fmt.Sprintf("/apis/%s/%s/namespaces/default/%s", icanhazlbAPIGroup, icanhazlbAPIVersion, icanhazlbServicePlural)).
-		Body(raw).
-		Do(context.TODO())
+		Body(raw)
+
+	response := request.Do(context.TODO())
+	if response.Error() != nil {
+		return fmt.Errorf("failed to create CRD: %v", response.Error())
+	}
+
+	rawResponse, err := response.Raw()
 	if err != nil {
-		return fmt.Errorf("failed to create CRD: %v", err)
+		return fmt.Errorf("failed to read raw response: %v", err)
+	}
+
+	var decodedJSON struct {
+		Metadata struct {
+			ManagedFields []struct {
+				Operation *string `json:"operation"`
+			} `json:"managedFields"`
+		} `json:"metadata"`
+	}
+
+	if err := json.Unmarshal(rawResponse, &decodedJSON); err != nil {
+		return fmt.Errorf("failed to unmarshal JSON response: %v", err)
+	}
+
+	if len(decodedJSON.Metadata.ManagedFields) > 0 && decodedJSON.Metadata.ManagedFields[0].Operation != nil {
+		// The operation field is present, indicating success
+		fmt.Println("Success")
+	} else {
+		// The operation field is not present, indicating failure
+		fmt.Println("Failure")
 	}
 
 	return nil
