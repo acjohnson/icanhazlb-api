@@ -1,13 +1,13 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"log"
 	"net/http"
 	"os"
 	"regexp"
 	"strings"
-	"context"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
@@ -129,7 +129,10 @@ func parseIPAddressFromHostname(hostname string) string {
 	regex := regexp.MustCompile(`(\d{1,3}[-._]){3}\d{1,3}`)
 
 	match := regex.FindString(hostname)
-	return strings.ReplaceAll(match, "-", ".")
+	matchFrDash := strings.ReplaceAll(match, "-", ".")
+	matchFrUnderscore := strings.ReplaceAll(matchFrDash, "_", ".")
+
+	return matchFrUnderscore
 }
 
 func createCRDInKubernetes(ipAddress, hostname string) {
